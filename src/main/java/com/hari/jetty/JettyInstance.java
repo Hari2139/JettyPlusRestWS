@@ -2,7 +2,9 @@ package com.hari.jetty;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.InputStreamReader;
+import java.lang.management.ManagementFactory;
 import java.math.BigInteger;
 import java.net.InetAddress;
 import java.net.ServerSocket;
@@ -10,8 +12,12 @@ import java.net.Socket;
 import java.net.URL;
 import java.security.SecureRandom;
 
+import javax.management.ObjectName;
+
+import org.apache.log4j.LogManager;
 import org.apache.log4j.PropertyConfigurator;
 import org.eclipse.jetty.annotations.AnnotationConfiguration;
+import org.eclipse.jetty.jmx.MBeanContainer;
 import org.eclipse.jetty.plus.webapp.EnvConfiguration;
 import org.eclipse.jetty.plus.webapp.PlusConfiguration;
 import org.eclipse.jetty.server.Server;
@@ -25,16 +31,12 @@ import org.eclipse.jetty.webapp.TagLibConfiguration;
 import org.eclipse.jetty.webapp.WebAppContext;
 import org.eclipse.jetty.webapp.WebInfConfiguration;
 import org.eclipse.jetty.webapp.WebXmlConfiguration;
+import org.eclipse.jetty.xml.XmlConfiguration;
 
 /**
- * Description: 
- * File: $ JettyInstance.java $
- * Module:  com.hari
- * Created: Oct 9, 2013
+ * Description: I create and start the embedded Jetty server.
+ * @since Oct 9, 2013
  * @author Hari 
- * @version $Revision:  $
- * Last Changed: $Date: Oct 9, 2013 9:01:59 PM $
- * Last Changed By: $ Hari $
  */
 public class JettyInstance {
 	/** The logger. */
@@ -58,8 +60,23 @@ public class JettyInstance {
 		if (logConfig.exists()) {
 			PropertyConfigurator.configureAndWatch(logConfig.getPath());
 		}
-		server = new Server(8080);
+		//Load jetty.xml
+		File jettyXml = new File("jetty.xml");
+		if (!jettyXml.exists()) {
+			throw new Exception("Could not find jetty XML.");
+		}
+		server = new Server();
+		//Add JMX related MBeans
+		MBeanContainer mbContainer = new MBeanContainer(
+				java.lang.management.ManagementFactory.getPlatformMBeanServer());
+		server.getContainer().addEventListener(mbContainer);
+		server.addBean(mbContainer);
+		mbContainer.addBean(logger);
+		XmlConfiguration cfg = new XmlConfiguration(new FileInputStream(
+				jettyXml));
+		server = (Server) cfg.configure(server);
 		WebAppContext webAppContext = new WebAppContext();
+		webAppContext.setContextPath("/jetty");
 		URL location = JettyInstance.class.getProtectionDomain()
 				.getCodeSource().getLocation();
 		logger.info("WAR location: " + location.toString());
@@ -77,6 +94,9 @@ public class JettyInstance {
 		monitorThread.start();
 		server.start();
 		server.join();
+		server.join();
+		logger.info("Jetty shutdown complete.");
+		LogManager.shutdown();
 	}
 
 	/**
@@ -119,6 +139,12 @@ public class JettyInstance {
 				server.stop();
 				socket.close();
 				serverSocket.close();
+				//We should also destroy the JMX MBean connector server which is running on 1099 (created in jetty.xml)
+				//otherwise, the JVM will still be running
+				ObjectName on = new ObjectName(
+						"org.eclipse.jetty.jmx:name=rmiconnectorserver");//This is the name we gave in jetty.xml
+				ManagementFactory.getPlatformMBeanServer().invoke(on, "stop",
+						null, null);
 			}
 			catch (Exception e) {
 				e.printStackTrace();
